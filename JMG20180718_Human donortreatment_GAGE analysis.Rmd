@@ -1,0 +1,141 @@
+---
+title: "GAGE analysis_human_donor treatment"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Purpose: 
+To assess if the differentially expressed human (also includes HBV) genes (when donor and treatment are set as factors in the design) are enriched for members of specific pathways. 
+This analysis includes the July 2018 samples. 
+
+Load required libraries
+```{r required libraries}
+library(pathview)
+library(gage)
+library(gageData)
+library(dplyr)
+library(tibble)
+library(gtools)
+library(gplots)
+library(ggplot2)
+library(purrr)
+data(kegg.gs)
+library(reshape2)
+library(stringr)
+library(xlsx)
+```
+
+Read in the appropriate DGE files
+```{r file read-in}
+data_dir <- "Human DGEs_donortreatment"
+sampleFiles <- basename(Sys.glob(file.path(data_dir, "*txt")))
+sampleNames <- str_replace(sampleFiles, "^[0-9]*-*[0-9]*-*[0-9]*human_donor_treatment*","") %>%
+  str_replace("_*\\s*analysis_results.txt", "")
+sampleNames
+```
+
+```{r GAGE analysis}
+
+##Function to appropriately format files for GAGE analysis and then actually perform
+##GAGE analysis
+gage_mixed <- function(files) {     
+  d <- read.delim(files, header = TRUE) 
+  dd <-dplyr::select(d, log2FoldChange, padj, ENTREZID) %>%
+    na.omit() %>%
+    dplyr::select(log2FoldChange, ENTREZID) %>%
+    distinct(ENTREZID, .keep_all = TRUE) 
+  dd$ENTREZID <- gsub(pattern = ",.*", replacement = "", dd$ENTREZID)
+  e = dd$log2FoldChange
+  names(e) = dd$ENTREZID
+  ##As per GAGE manual suggestion, looking at same.dir = FALSE since genes in pathways
+  ##do not tend to just increase or just decrease.
+  ef <- gage(na.omit(e), gsets = kegg.gs, same.dir = FALSE)
+  g <- ef$greater
+  gg <- g[mixedorder(rownames(g), decreasing = TRUE),]
+}
+
+##Applying function to DGE files
+gage_mixed_list <- lapply(file.path(data_dir, sampleFiles), gage_mixed)
+names(gage_mixed_list) <- sampleNames
+str(gage_mixed_list)
+
+##Making output into a data frame
+gage_form_mixed <- lapply(gage_mixed_list, data.frame)
+gage_mixed_df <- do.call("cbind", gage_form_mixed)%>%
+  rownames_to_column(var = "Pathway") %>%
+  dplyr::select(Pathway, ends_with("q.val")) 
+##Excel file of unfiltered pathway analysis
+write.xlsx(gage_mixed_df, file.path("GAGE analysis", paste(Sys.Date(), 
+    "human_GAGE analysis_donortreatment_unfiltered.xlsx")))
+
+##Filtering GAGE analysis based on q.val 
+gage_mixed_df_filtered <- 
+  dplyr::filter(gage_mixed_df, `HumanHBVgenes-HBV_vs_mock_d8.q.val` <= 0.07 |   
+  `HumanHBVgenes-HBV_vs_mock_d28.q.val` <= 0.07 |
+  `HumanHBVgenes-coinf_vs_mock_d8.q.val` <= 0.07 |
+  `HumanHBVgenes-coinf_vs_mock_d28.q.val` <= 0.07 |
+  `HumanHBVgenes-coinf_vs_HBV_d8.q.val` <= 0.07 |
+  `HumanHBVgenes-coinf_vs_HBV_d8.q.val` <= 0.07)
+
+##Put the columns in order of HBV v mock d8, d28; coinf v mock d8, d28; 
+##coinf v HBV d8, d28.
+colnames(gage_mixed_df_filtered)
+gage_mixed_df_filtered <- gage_mixed_df_filtered[,c(1, 3, 2, 7, 6, 5, 4)] 
+
+##Make data frame into matrix for heatmap.
+gage_mixed_matrix <- as.matrix(gage_mixed_df_filtered[, c(2:7)])
+rownames(gage_mixed_matrix) <- gage_mixed_df_filtered[,1]
+colnames(gage_mixed_matrix) <- gsub(pattern = ".q.val", replacement = "", 
+                                    colnames(gage_mixed_matrix))
+colnames(gage_mixed_matrix) <-  gsub(pattern = "HumanHBVgenes-", replacement = "", 
+                                     colnames(gage_mixed_matrix))
+colnames(gage_mixed_matrix)
+
+gage_mixed.m <- melt(gage_mixed_matrix) 
+
+##Now change all q.values to NA if they are greater than the cutoff of 0.07
+##so we can color in the geom_tile all NA values as grey. 
+gage_mixed.m$value[gage_mixed.m$value > 0.07] <- NA
+
+##If desired, taking the -log10 of the q values. 
+##gage_mixed.m$value <- -log10(gage_mixed.m$value)
+
+##Make the value column a factor for ggplot purposes only if you want it to be a 
+##discrete scale versus continuous as it is now (comes up as numeric).
+##gage_mixed.m$value <- as.factor(gage_mixed.m$value)
+
+##Function to plot the heatmap of the filtered GAGE matrix.
+gage_plotting <- function(gage_matrix_input)
+{
+matrix_plot <- ggplot(gage_matrix_input, aes(x = Var2, y = Var1, fill = value)) +
+geom_tile(aes(fill = value), colour = "white") +
+scale_fill_continuous(low = "#08519c", high = "#deebf7", na.value = "grey80") +
+theme(axis.text.x = element_text(angle = 90, hjust = 1),
+axis.title.x = element_blank(),
+axis.title.y = element_blank(),
+axis.ticks = element_blank(),
+panel.background = element_blank())
+print(matrix_plot + labs(fill = "q value"))
+ggsave(filename = file.path("GAGE analysis", paste(Sys.Date(),
+    "human_donortreatmentGAGE_plot.png")), matrix_plot, dpi = 350, height = 7, width = 10)
+}
+
+##Apply function to matrix generated above. 
+gage_plotting(gage_mixed.m)
+
+##Write Excel file of filtered GAGE output.
+write.xlsx(gage_mixed_df_filtered, file.path("GAGE analysis", paste(Sys.Date(),
+"human_GAGE analysis_donortreatment_filtered.xlsx")))
+
+```
+
+Session Info 
+```{r sessioninfo}
+sessionInfo()
+```
+

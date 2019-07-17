@@ -1,0 +1,131 @@
+---
+title: "GO term analysis_human_donor treatment_including July 2018 samples"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Purpose: 
+To assess if the differentially expressed human (also includes HBV and HDV) genes
+(when donor and treatment are set as factors in the design) are enriched for 
+members of specific GO terms. This analysis includes the July 2018 samples. 
+
+Load required libraries
+```{r required libraries}
+library(pathview)
+library(gage)
+library(gageData)
+library(dplyr)
+library(tibble)
+library(gtools)
+library(gplots)
+library(ggplot2)
+library(purrr)
+data(kegg.gs)
+data(go.sets.hs)
+data(go.subs.hs)
+go.bp = go.sets.hs[go.subs.hs$BP] ##Only examining GO biological processes terms
+library(reshape2)
+library(stringr)
+library(viridis)
+library(xlsx)
+```
+
+Read in the appropriate DGE files
+```{r file read-in}
+data_dir <- "Human DGEs_donortreatment"
+sampleFiles <- basename(Sys.glob(file.path(data_dir, "*txt")))
+sampleNames <- str_replace(sampleFiles, "^[0-9]*-*[0-9]*-*[0-9]*human_donor_treatment*","") %>%
+  str_replace("_*\\s*analysis_results.txt", "")
+sampleNames
+```
+
+```{r GO term analysis}
+
+##Function to appropriately format files for GO term analysis and then perform
+##GO term analysis using GAGE package
+
+##Assessing enrichment for GO terms that are downregulated amongst DGEs
+GO_bp_less <- function(files) {     
+  d <- read.delim(files, header = TRUE) 
+  ##d <- d[-grep("AAB", d[,1]),] 
+  dd <-dplyr::select(d, log2FoldChange, padj, ENTREZID) %>%
+  na.omit() %>%
+    dplyr::select(log2FoldChange, ENTREZID) %>%
+    distinct(ENTREZID, .keep_all = TRUE) 
+  dd$ENTREZID <- gsub(pattern = ",.*", replacement = "", dd$ENTREZID)
+  e = dd$log2FoldChange
+  names(e) = dd$ENTREZID
+  ef <- gage(na.omit(e), gsets = go.bp, same.dir = TRUE)
+  g <- ef$less
+  gg <- g[mixedorder(rownames(g), decreasing = TRUE),]
+}
+
+##Assessing enrichment for GO terms that are upregulated amongst DGEs
+GO_bp_greater <- function(files) {     
+  d <- read.delim(files, header = TRUE) 
+  ##d <- d[-grep("AAB", d[,1]),] 
+  dd <-dplyr::select(d, log2FoldChange, padj, ENTREZID) %>%
+      na.omit() %>%
+    dplyr::select(log2FoldChange, ENTREZID) %>%
+    distinct(ENTREZID, .keep_all = TRUE) 
+  dd$ENTREZID <- gsub(pattern = ",.*", replacement = "", dd$ENTREZID)
+  e = dd$log2FoldChange
+  names(e) = dd$ENTREZID
+  ef <- gage(na.omit(e), gsets = go.bp, same.dir = TRUE)
+  g <- ef$greater
+  gg <- g[mixedorder(rownames(g), decreasing = TRUE),]
+}
+
+##applying function
+GO_less <- lapply(file.path(data_dir, sampleFiles), GO_bp_less)
+names(GO_less) <- sampleNames
+
+##making output into a data frame
+form_GO_less <- lapply(GO_less, data.frame)
+GO_less_df <- do.call("cbind", form_GO_less)%>%
+  rownames_to_column(var = "Pathway") %>%
+  dplyr::select(Pathway, ends_with("q.val")) 
+
+##filtering data frame to include GO terms where at least one group
+##has a padjval <= 0.05
+GO_less_df <- GO_less_df[as.logical((rowSums(is.na(GO_less_df))-
+              ncol(GO_less_df))),] %>%
+  dplyr::filter_all(any_vars(.<= 0.05))
+head(GO_less_df)
+
+##csv of data frame
+write.csv(GO_less_df, file = file.path(data_dir, paste(Sys.Date(), 
+         "donortreatment_GO biological processes lesser.csv")))
+
+##applying function
+GO_greater <- lapply(file.path(data_dir, sampleFiles), GO_bp_greater)
+names(GO_greater) <- sampleNames
+
+##making output into a data frame
+form_GO_greater <- lapply(GO_greater, data.frame)
+GO_greater_df <- do.call("cbind", form_GO_greater)%>%
+  rownames_to_column(var = "Pathway") %>%
+  dplyr::select(Pathway, ends_with("q.val")) 
+
+##filtering data frame to include GO terms where at least one group
+##has a padjval <= 0.05
+GO_greater_df <- GO_greater_df[as.logical((rowSums(is.na(GO_greater_df))-
+              ncol(GO_greater_df))),] %>%
+  dplyr::filter_all(any_vars(.<= 0.05))
+head(GO_greater_df)
+
+##csv of data frame 
+write.csv(GO_greater_df, file = file.path(data_dir, paste(Sys.Date(), 
+       "donortreatment_GO biological processes greater.csv")))
+
+```
+Session Info
+```{r sess}
+sessionInfo()
+```
+
